@@ -1,0 +1,58 @@
+name: NinjaVPN watch
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Учебная тревога"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверяем сервер
+        env:
+          CHECK_URL: ${{ secrets.CHECK_URL }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_ID: ${{ secrets.ADMIN_ID }}
+          TEST: ${{ inputs.test }}
+        run: |
+          send() {
+            curl -s -o /dev/null "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${ADMIN_ID}" --data-urlencode "text=$1"
+          }
+          if [ "$TEST" = "true" ]; then
+            send "🧪 Учебная тревога: внешний сторож NinjaVPN на посту и умеет до тебя достучаться"
+            exit 0
+          fi
+          now=down
+          for i in 1 2 3; do
+            if curl -s -o /dev/null -m 15 --fail "$CHECK_URL"; then now=up; break; fi
+            sleep 20
+          done
+          prev=$(cat state.txt 2>/dev/null || echo up)
+          if [ "$now" != "$prev" ]; then
+            if [ "$now" = "down" ]; then
+              send "🚨 Внешний сторож: сервер NinjaVPN не отвечает уже несколько минут. Возможно, он выключен или недоступен — проверь панель хостинга."
+            else
+              send "✅ Внешний сторож: сервер NinjaVPN снова на связи"
+            fi
+          fi
+          echo "$now" > state.txt
+          last=$(git log -1 --format=%ct -- state.txt 2>/dev/null)
+          if [ "$now" != "$prev" ] || [ $(( $(date +%s) - ${last:-0} )) -gt 1728000 ]; then
+            git config user.name "ninja-watch"
+            git config user.email "ninja-watch@users.noreply.github.com"
+            git add state.txt
+            git commit -m "watch: $now" && git push
+          fi
